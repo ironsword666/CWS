@@ -3,7 +3,7 @@
 import os
 from parser.utils import Embedding
 from parser.utils.alg import viterbi
-from parser.utils.common import pad, unk
+from parser.utils.common import pad, unk, bos, eos
 from parser.utils.corpus import CoNLL, Corpus
 from parser.utils.field import BertField, Field, NGramField
 from parser.utils.fn import get_spans
@@ -23,7 +23,8 @@ class CMD(object):
         if not os.path.exists(args.fields) or args.preprocess:
             print("Preprocess the data")
             self.CHAR = Field('chars', pad=pad, unk=unk,
-                              lower=True)
+                              bos=bos, eos=eos, lower=True)
+            # TODO span as label, modify chartfield to spanfield
             self.LABEL = Field('labels')
 
             if args.feat == 'bert':
@@ -31,19 +32,20 @@ class CMD(object):
                 self.FEAT = BertField('bert',
                                       pad='[PAD]',
                                       bos='[CLS]',
+                                      eos='[SEP]',
                                       tokenize=tokenizer.encode)
                 self.fields = CoNLL(CHAR=(self.CHAR, self.FEAT),
                                     LABEL=self.LABEL)
             elif args.feat == 'bigram':
                 self.BIGRAM = NGramField(
-                    'bichar', n=2, pad=pad, unk=unk, lower=True)
+                    'bichar', n=2, pad=pad, unk=unk, bos=bos, eos=eos, lower=True)
                 self.fields = CoNLL(CHAR=(self.CHAR, self.BIGRAM),
                                     LABEL=self.LABEL)
             elif args.feat == 'trigram':
                 self.BIGRAM = NGramField(
-                    'bichar', n=2, pad=pad, unk=unk, lower=True)
+                    'bichar', n=2, pad=pad, unk=unk, bos=bos, eos=eos, lower=True)
                 self.TRIGRAM = NGramField(
-                    'trichar', n=3, pad=pad, unk=unk, lower=True)
+                    'trichar', n=3, pad=pad, unk=unk, bos=bos, eos=eos, lower=True)
                 self.fields = CoNLL(CHAR=(self.CHAR,
                                           self.BIGRAM,
                                           self.TRIGRAM),
@@ -73,6 +75,7 @@ class CMD(object):
                 self.TRIGRAM.build(train, args.min_freq,
                                    embed=embed,
                                    dict_file=args.dict_file)
+            # TODO
             self.LABEL.build(train)
             torch.save(self.fields, args.fields)
         else:
@@ -85,23 +88,27 @@ class CMD(object):
                 self.CHAR, self.BIGRAM, self.TRIGRAM = self.fields.CHAR
             else:
                 self.CHAR = self.fields.CHAR
+            # TODO
             self.LABEL = self.fields.LABEL
-        self.criterion = nn.CrossEntropyLoss()
-        # [B, E, M, S]
-        self.trans = (torch.tensor([1., 0., 0., 1.]).log().to(args.device),
-                      torch.tensor([0., 1., 0., 1.]).log().to(args.device),
-                      torch.tensor([[0., 1., 1., 0.],
-                                    [1., 0., 0., 1.],
-                                    [0., 1., 1., 0.],
-                                    [1., 0., 0., 1.]]).log().to(args.device))
+        # TODO loss funciton 
+        # self.criterion = nn.CrossEntropyLoss()
+        # # [B, E, M, S]
+        # self.trans = (torch.tensor([1., 0., 0., 1.]).log().to(args.device),
+        #               torch.tensor([0., 1., 0., 1.]).log().to(args.device),
+        #               torch.tensor([[0., 1., 1., 0.],
+        #                             [1., 0., 0., 1.],
+        #                             [0., 1., 1., 0.],
+        #                             [1., 0., 0., 1.]]).log().to(args.device))
 
         args.update({
             'n_chars': self.CHAR.vocab.n_init,
+            # TODO
             'n_labels': len(self.LABEL.vocab),
             'pad_index': self.CHAR.pad_index,
             'unk_index': self.CHAR.unk_index
         })
 
+        # TODO
         vocab = f"{self.CHAR}\n{self.LABEL}\n"
         if hasattr(self, 'FEAT'):
             args.update({

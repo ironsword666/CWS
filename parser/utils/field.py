@@ -219,6 +219,7 @@ class BertField(Field):
                      for sequence in sequences]
 
         for sequence in sequences:
+            # TODO bert 
             sequence = self.preprocess(sequence)[:-1]
             sequence = [piece if piece else self.preprocess(self.pad)
                         for piece in sequence]
