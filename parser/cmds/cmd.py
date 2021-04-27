@@ -133,6 +133,7 @@ class CMD(object):
         self.model.train()
 
         for data in loader:
+            # TODO label
             if self.args.feat == 'bert':
                 chars, feats, labels = data
                 feed_dict = {"chars": chars, "feats": feats}
@@ -149,10 +150,30 @@ class CMD(object):
 
             self.optimizer.zero_grad()
 
-            mask = chars.ne(self.args.pad_index)
-            scores = self.model(feed_dict)
-
-            loss = self.get_loss(scores, labels, mask)
+            batch_size, seq_len = chars.shape
+            # fenceposts length: (B)
+            lens = chars.ne(self.args.pad_index).sum(1) - 1
+            # TODO purpose
+            # (B, 1, L-1)
+            mask = lens.new_tensor(range(seq_len - 1)) < lens.view(-1, 1, 1)
+            # TODO purpose
+            # for example, seq_len=10, fenceposts=7, pad=2
+            # for each sentence, get a L-1*L-1 matrix
+            # span (i, i) and pad are masked 
+            # [[False,  True,  True,  True,  True,  True,  True, False, False],
+            #  [False, False,  True,  True,  True,  True,  True, False, False],
+            #  [False, False, False,  True,  True,  True,  True, False, False],
+            #  [False, False, False, False,  True,  True,  True, False, False],
+            #  [False, False, False, False, False,  True,  True, False, False],
+            #  [False, False, False, False, False, False,  True, False, False],
+            #  [False, False, False, False, False, False, False, False, False],
+            #  [False, False, False, False, False, False, False, False, False],
+            #  [False, False, False, False, False, False, False, False, False]]
+            # (B, L-1, L-1)
+            mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
+            # (B, L-1, L-1)
+            s_span = self.model(feed_dict)
+            loss, _ = self.get_loss(s_span, spans, mask)
             loss.backward()
             nn.utils.clip_grad_norm_(self.model.parameters(),
                                      self.args.clip)
@@ -222,5 +243,29 @@ class CMD(object):
 
         return all_labels
 
-    def get_loss(self, scores, labels, mask):
-        return self.criterion(scores[mask], labels[mask])
+    def get_loss(self, s_span, spans, mask):
+        """crf loss
+
+        Args:
+            s_span (Tensor(B, N, N)): scores for candidate words (i, j)
+            spans (Tensor): groud_truth words
+            mask ([type]): # TODO
+
+        Returns:
+            loss [type]: 
+            span_probs (Tensor(B, N, N)): marginal probability for candidate words
+        """
+
+        # span_mask = spans & mask
+        span_loss, span_probs = crf(s_span, mask, spans, self.args.marg)
+
+        loss = span_loss
+
+        return loss, span_probs
+
+    def decode(self, s_span, mask):
+        pred_spans = dag(s_span, mask)
+        
+        preds = [[(i, j) for i, j in spans] for spans in pred_spans]
+
+        return preds

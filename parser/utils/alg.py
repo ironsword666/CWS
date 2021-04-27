@@ -48,12 +48,17 @@ def kmeans(x, k):
 
 @torch.enable_grad()
 def crf(scores, mask, target=None, marg=False):
+    # get first line of mask matrix
+    # (B) actual length, ignore bos, eos, and pad
     lens = mask[:, 0].sum(-1)
     total = lens.sum()
+    
     batch_size, seq_len, _ = scores.shape
+
     training = scores.requires_grad
     # always enable the gradient computation of scores
     # in order for the computation of marginal probs
+    # TODO size
     s = inside(scores.requires_grad_(), mask)
     logZ = s[0].gather(0, lens.unsqueeze(0)).sum()
     # marginal probs are used for decoding, and can be computed by
@@ -71,14 +76,18 @@ def crf(scores, mask, target=None, marg=False):
 
 def inside(scores, mask):
     batch_size, seq_len, _ = scores.shape
+    # TODO difficult to understand the view of tensor
     # [seq_len, seq_len, batch_size]
     scores, mask = scores.permute(1, 2, 0), mask.permute(1, 2, 0)
+    # same shape as scores, but filled with -inf
     s = torch.full_like(scores, float('-inf'))
 
     for w in range(1, seq_len):
         # n denotes the number of spans to iterate,
         # from span (0, w) to span (n, n+w) given width w
         n = seq_len - w
+
+        # default: offset=0, dim1=0, dim2=1
         # diag_mask is used for ignoring the excess of each sentence
         # [batch_size, n]
         diag_mask = mask.diagonal(w)
@@ -86,6 +95,7 @@ def inside(scores, mask):
         if w == 1:
             s.diagonal(w)[diag_mask] = scores.diagonal(w)[diag_mask]
             continue
+
         # [n, w, batch_size]
         s_span = stripe(s, n, w-1, (0, 1)) + stripe(s, n, w-1, (1, w), 0)
         # [batch_size, n, w]
@@ -134,30 +144,118 @@ def cky(scores, mask):
     return trees
 
 
-def viterbi(trans, emit, mask):
-    strans, etrans, trans = trans
-    emit, mask = emit.transpose(0, 1), mask.t()
-    seq_len, batch_size, n_labels = emit.shape
-    lens = mask.sum(0)
-    delta = emit.new_zeros(seq_len, batch_size, n_labels)
-    paths = emit.new_zeros(seq_len, batch_size, n_labels, dtype=torch.long)
+def neg_log_likelihood(scores, tags, mask, transition):
+    '''
+    Args:
+        scores (Tensor(batch, seq_len, seq_len)): ...
+        tags (Tensor(batch, seq_len)): include <bos> <eos> and <pad>
+        mask (Tensor(batch, seq_len)): mask <bos> <eos > and <pad>
+    '''
 
-    delta[0] = strans + emit[0]  # [batch_size, n_labels]
+    gold_scores = score_sentence(scores, tags, mask, transition)
+    logZ = partition_function(scores, mask)
+    loss = logZ - gold_scores # (batch_size)
+
+    return loss.mean()
+
+def score_function(scores, spans, mask):
+    """[summary]
+
+    Args:
+        scores ([type]): [description]
+        spans ([type]): [description]
+        mask ([type]): [description]
+
+    Returns:
+        [Tensor(*)]: scores of all spans for a batch
+    """
+
+    batch_size, _, _ = scores.size()
+    lens = mask[:, 0].sum(dim=-1)
+
+    return scores[mask & spans]
+
+def partition_function(scores, mask):
+    '''
+    Args:
+        scores (Tensor(batch, seq_len, tag_nums)): ...
+        tags (Tensor(batch, seq_len)): include <bos> <eos> and <pad>
+        mask (Tensor(batch, seq_len)): mask <bos> <eos > and <pad>
+        transition (Tensor(tag_nums, tag_nums)): transition matrix, transition_ij is score of tag_i transit to tag_j
+    '''
+
+    batch_size, seq_len, _ = scores.size()
+    lens = mask[:, 0].sum(dim=-1)
+
+    # s[*, i] is logsumexp score where a sequence segmentation path ending in i
+    s = scores.new_zeros(batch_size, seq_len)
+    # TODO initial ?
+    s.fill_(float("-inf"))
+
+    # links[*, k, i] is logsumexp score of a sequence end in k and link a word (k, i)
+    links = scores.new_zeros(batch_size, seq_len, seq_len)
+
 
     for i in range(1, seq_len):
-        scores = trans + delta[i - 1].unsqueeze(-1)
-        scores, paths[i] = scores.max(1)
-        delta[i] = scores + emit[i]
+        # 0 ~ k is max segmentation path linked with a word (k+1, i)
+        links[:, i-1, i:] = s[:, i-1].unsqueeze(-1) + scores[:, i-1, i:]
+        # 0 <= k < i
+        s[:, i] = = torch.logsumexp(links[:, :i, i], dim=-1)
+        
+    return s[torch.arange(batch_size), lens]
 
-    preds = []
-    for i, length in enumerate(lens):
-        prev = torch.argmax(delta[length - 1, i] + etrans)
 
-        predict = [prev]
-        for j in reversed(range(1, length)):
-            prev = paths[j, i, prev]
-            predict.append(prev)
-        # flip the predicted sequence before appending it to the list
-        preds.append(paths.new_tensor(predict).flip(0))
+@torch.no_grad()
+def dag(scores, mask):
+    """Chinese Word Segmentation with Directed Acyclic Graph.
 
-    return preds
+    Args:
+        scores (Tensor(B, L-1, L-1)): (*, i, j) is score for span(i, j)
+        mask (Tensor(B, L-1, L-1)): 
+
+    Returns:
+        segs (list[]): segmentation
+    """
+
+    batch_size, seq_len, _ = scores.size()
+    # actual words number: N
+    # TODO no need (B, L-1, L-1), (B, L-1) is enough
+    lens = mask[:, 0].sum(dim=-1)
+
+    # # links[*, k, i, j] <=> e(k, j) + t(i, j) <=> k is labeled as tag_j and k-1 is labeled as tag_i
+    # links = scores.unsqueeze(dim=2) + transition # (batch, seq_len, tag_nums, tag_nums)
+
+    # s[*, i] is max score where a sequence segmentation path ending in i
+    s = scores.new_zeros(batch_size, seq_len)
+    # backpoint[*, i] is split point k where sequence end in i and (k, i) is last word
+    backpoints = scores.new_ones(batch_size, seq_len).long()
+
+    # links[*, k, i] is max score of a sequence end in k and link a word (k, i)
+    links = scores.new_zeros(batch_size, seq_len, seq_len)
+
+    # preds = scores.new_ones((batch_size, seq_len))
+
+    for i in range(1, seq_len):
+        # 0 - k is max segmentation path, link a word (k+1, i) to the path
+        links[:, i-1, i:] = s[:, i-1].unsqueeze(-1) + scores[:, i-1, i:]
+        # 0 <= k < i
+        max_values, max_indices = torch.max(links[:, :i, i], dim=-1)
+        s[:, i] = max_values
+        backpoints[:, i] = max_indices
+
+    def backtrack(backpoint, i):
+
+        if i == 0:
+            return []
+        split = backpoint[i]
+        sub_seg = backtrack(backpoint, split)
+
+        return sub_seg + [split, i]
+
+    segs = [backtrack(backpoints[i], length)
+            for i, length in enumerate(lens.tolist())]
+
+    return segs
+
+
+
