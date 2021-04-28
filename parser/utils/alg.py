@@ -123,20 +123,23 @@ def partition_function(scores, mask):
     lens = mask[:, 0].sum(dim=-1)
 
     # s[*, i] is logsumexp score where a sequence segmentation path ending in i
-    # s = scores.new_zeros(batch_size, seq_len)
+    s = scores.new_zeros(batch_size, seq_len)
     # TODO initial ?
-    s = torch.full_like(scores[:, 0], float("-inf"))
+    # s = torch.full_like(scores[:, 0], float("-inf"))
 
-    # links[*, k, i] is logsumexp score of a sequence end in k and link a word (k, i)
-    links = scores.new_zeros(batch_size, seq_len, seq_len)
+    # # links[*, k, i] is logsumexp score of a sequence end in k and link a word (k, i)
+    # links = scores.new_zeros(batch_size, seq_len, seq_len)
 
 
+    # for i in range(1, seq_len):
+    #     # 0 ~ k is max segmentation path linked with a word (k+1, i)
+    #     # TODO -inf with zero? logsumexp?
+    #     links[:, i-1, i:] = s[:, i-1].unsqueeze(-1) + scores[:, i-1, i:]
+    #     # 0 <= k < i
+    #     s[:, i] = torch.logsumexp(links[:, :i, i], dim=-1)
     for i in range(1, seq_len):
-        # 0 ~ k is max segmentation path linked with a word (k+1, i)
-        # TODO -inf with zero? logsumexp?
-        links[:, i-1, i:] = s[:, i-1].unsqueeze(-1) + scores[:, i-1, i:]
         # 0 <= k < i
-        s[:, i] = torch.logsumexp(links[:, :i, i], dim=-1)
+        s[:, i] = torch.logsumexp(s[:, :i] + scores[:, :i, i], dim=-1)
         
     return s[torch.arange(batch_size), lens]
 
@@ -166,16 +169,11 @@ def directed_acyclic_graph(scores, mask):
     # backpoint[*, i] is split point k where sequence end in i and (k, i) is last word
     backpoints = scores.new_ones(batch_size, seq_len).long()
 
-    # links[*, k, i] is max score of a sequence end in k and link a word (k, i)
-    links = scores.new_zeros(batch_size, seq_len, seq_len)
-
     # preds = scores.new_ones((batch_size, seq_len))
 
     for i in range(1, seq_len):
-        # 0 - k is max segmentation path, link a word (k+1, i) to the path
-        links[:, i-1, i:] = s[:, i-1].unsqueeze(-1) + scores[:, i-1, i:]
         # 0 <= k < i
-        max_values, max_indices = torch.max(links[:, :i, i], dim=-1)
+        max_values, max_indices = torch.max(s[:, :i] + scores[:, :i, i], dim=-1)
         s[:, i] = max_values
         backpoints[:, i] = max_indices
 
@@ -194,8 +192,9 @@ def directed_acyclic_graph(scores, mask):
         split = backpoint[i]
         sub_seg = backtrack(backpoint, split)
 
-        return sub_seg + [split, i]
+        return sub_seg + [(split, i)]
 
+    backpoints = backpoints.tolist()
     segs = [backtrack(backpoints[i], length)
             for i, length in enumerate(lens.tolist())]
 
@@ -205,7 +204,7 @@ def inside(scores, mask):
     batch_size, seq_len, _ = scores.shape
     # TODO difficult to understand the view of tensor
     # [seq_len, seq_len, batch_size]
-    scores, mask = scores.permute(1, 2, 0), mask.permute(1, 2, 0)
+    mask = scores.permute(1, 2, 0), mask.permute(1, 2, 0)
     # same shape as scores, but filled with -inf
     s = torch.full_like(scores, float('-inf'))
 

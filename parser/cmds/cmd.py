@@ -174,11 +174,11 @@ class CMD(object):
             # (B, L-1, L-1)
             s_span = self.model(feed_dict)
 
-            with torch.autograd.set_detect_anomaly(True):
-                loss = self.get_loss(s_span, segs, mask)
+            # with torch.autograd.set_detect_anomaly(True):
+            loss = self.get_loss(s_span, segs, mask)
                 
-            with torch.autograd.set_detect_anomaly(True):
-                loss.backward()
+            # with torch.autograd.set_detect_anomaly(True):
+            loss.backward()
 
             nn.utils.clip_grad_norm_(self.model.parameters(),
                                      self.args.clip)
@@ -206,16 +206,17 @@ class CMD(object):
                 chars, segs = data
                 feed_dict = {"chars": chars}
 
-            # TODO mask
-            mask = chars.ne(self.args.pad_index)
-            # TODO
-            lens = mask.sum(1).tolist()
+            batch_size, seq_len = chars.shape
+            lens = chars.ne(self.args.pad_index).sum(1) - 1
+            mask = lens.new_tensor(range(seq_len - 1)) < lens.view(-1, 1, 1)
+            mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
             s_span = self.model(feed_dict)
             # TODO
-            loss = self.get_loss(scores, segs, mask)
+            loss = self.get_loss(s_span, segs, mask)
 
             pred_segs = self.decode(s_span, mask)
-            gold_segs = segs
+            # list
+            gold_segs = [torch.nonzero(gold).tolist() for gold in segs]
 
             total_loss += loss.item()
             metric(pred_segs, gold_segs)
@@ -223,7 +224,7 @@ class CMD(object):
         total_loss /= len(loader)
 
         # TODO metric
-        return total_loss, "metric"
+        return total_loss, 0
 
     @torch.no_grad()
     def predict(self, loader):
