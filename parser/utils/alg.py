@@ -112,8 +112,8 @@ def score_function(scores, spans, mask):
 def partition_function(scores, mask):
     '''
     Args:
-        scores (Tensor(B, L, T)): ...
-        mask (Tensor(B, L))
+        scores (Tensor(B, N, N)): ...
+        mask (Tensor(B, N, N))
 
     Returns:
         (Tensor(B)): logZ
@@ -123,9 +123,9 @@ def partition_function(scores, mask):
     lens = mask[:, 0].sum(dim=-1)
 
     # s[*, i] is logsumexp score where a sequence segmentation path ending in i
-    s = scores.new_zeros(batch_size, seq_len)
+    # s = scores.new_zeros(batch_size, seq_len)
     # TODO initial ?
-    s.fill_(float("-inf"))
+    s = torch.full_like(scores[:, 0], float("-inf"))
 
     # links[*, k, i] is logsumexp score of a sequence end in k and link a word (k, i)
     links = scores.new_zeros(batch_size, seq_len, seq_len)
@@ -133,9 +133,10 @@ def partition_function(scores, mask):
 
     for i in range(1, seq_len):
         # 0 ~ k is max segmentation path linked with a word (k+1, i)
+        # TODO -inf with zero? logsumexp?
         links[:, i-1, i:] = s[:, i-1].unsqueeze(-1) + scores[:, i-1, i:]
         # 0 <= k < i
-        s[:, i] = = torch.logsumexp(links[:, :i, i], dim=-1)
+        s[:, i] = torch.logsumexp(links[:, :i, i], dim=-1)
         
     return s[torch.arange(batch_size), lens]
 

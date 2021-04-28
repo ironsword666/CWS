@@ -173,8 +173,13 @@ class CMD(object):
             mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
             # (B, L-1, L-1)
             s_span = self.model(feed_dict)
-            loss = self.get_loss(s_span, segs, mask)
-            loss.backward()
+
+            with torch.autograd.set_detect_anomaly(True):
+                loss = self.get_loss(s_span, segs, mask)
+                
+            with torch.autograd.set_detect_anomaly(True):
+                loss.backward()
+
             nn.utils.clip_grad_norm_(self.model.parameters(),
                                      self.args.clip)
             self.optimizer.step()
@@ -266,7 +271,7 @@ class CMD(object):
         # span_mask = spans & mask
         # span_loss, span_probs = crf(s_span, mask, spans, self.args.marg)
 
-        loss = neg_log_likelihood(scores, segs, mask)
+        loss = neg_log_likelihood(s_span, segs, mask)
 
         return loss
 
