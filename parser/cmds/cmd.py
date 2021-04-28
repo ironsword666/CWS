@@ -2,7 +2,7 @@
 
 import os
 from parser.utils import Embedding
-from parser.utils.alg import viterbi
+from parser.utils.alg import neg_log_likelihood, directed_acyclic_graph
 from parser.utils.common import pad, unk, bos, eos
 from parser.utils.corpus import CoNLL, Corpus
 from parser.utils.field import BertField, Field, NGramField
@@ -22,8 +22,10 @@ class CMD(object):
             os.mkdir(args.file)
         if not os.path.exists(args.fields) or args.preprocess:
             print("Preprocess the data")
+
             self.CHAR = Field('chars', pad=pad, unk=unk,
                               bos=bos, eos=eos, lower=True)
+                              
             # TODO span as label, modify chartfield to spanfield
             self.LABEL = Field('labels')
 
@@ -201,14 +203,17 @@ class CMD(object):
                 chars, labels = data
                 feed_dict = {"chars": chars}
 
+            # TODO mask
             mask = chars.ne(self.args.pad_index)
+            # TODO
             lens = mask.sum(1).tolist()
-            scores = self.model(feed_dict)
+            s_span = self.model(feed_dict)
+            # TODO
             loss = self.get_loss(scores, labels, mask)
-            pred_labels = [get_spans(self.LABEL.vocab.id2token(pred.tolist()))
-                           for pred in viterbi(self.trans, scores, mask)]
-            gold_labels = [get_spans(self.LABEL.vocab.id2token(gold.tolist()))
-                           for gold in labels[mask].split(lens)]
+
+            pred_spans = self.decode(s_span, mask)
+            gold_labels = labels
+
             total_loss += loss.item()
             metric(pred_labels, gold_labels)
         total_loss /= len(loader)
@@ -234,9 +239,12 @@ class CMD(object):
             else:
                 chars, labels = data
                 feed_dict = {"chars": chars}
+            # TODO
             mask = chars.ne(self.args.pad_index)
-            scores = self.model(feed_dict)
+            s_span = self.model(feed_dict)
+            # TODO
             pred_labels = viterbi(self.trans, scores, mask)
+            # TODO
             all_labels.extend(pred_labels)
         all_labels = [self.LABEL.vocab.id2token(sequence.tolist())
                       for sequence in all_labels]
@@ -257,15 +265,16 @@ class CMD(object):
         """
 
         # span_mask = spans & mask
-        span_loss, span_probs = crf(s_span, mask, spans, self.args.marg)
+        # span_loss, span_probs = crf(s_span, mask, spans, self.args.marg)
 
-        loss = span_loss
+        loss = neg_log_likelihood(scores, spans, mask)
 
-        return loss, span_probs
+        return loss
 
     def decode(self, s_span, mask):
-        pred_spans = dag(s_span, mask)
+
+        pred_spans = directed_acyclic_graph(s_span, mask)
         
-        preds = [[(i, j) for i, j in spans] for spans in pred_spans]
+        preds = pred_spans
 
         return preds

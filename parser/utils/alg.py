@@ -74,6 +74,123 @@ def crf(scores, mask, target=None, marg=False):
     return loss, probs
 
 
+
+def neg_log_likelihood(scores, spans, mask):
+    '''
+    Args:
+        scores (Tensor(batch, seq_len, seq_len)): ...
+        tags (Tensor(batch, seq_len)): include <bos> <eos> and <pad>
+        mask (Tensor(batch, seq_len)): mask <bos> <eos > and <pad>
+    '''
+
+    gold_scores = score_function(scores, spans, mask).sum()
+    logZ = partition_function(scores, mask).sum()
+    # TODO batch size or total span ?
+    loss = (logZ - gold_scores) / # (batch_size)
+
+    return loss
+
+def score_function(scores, spans, mask):
+    """[summary]
+
+    Args:
+        scores ([type]): [description]
+        spans ([type]): [description]
+        mask ([type]): [description]
+
+    Returns:
+        (Tensor(*)): scores of all spans for a batch
+    """
+
+    batch_size, _, _ = scores.size()
+    lens = mask[:, 0].sum(dim=-1)
+    # TODO score function
+
+    return scores[mask & spans]
+
+def partition_function(scores, mask):
+    '''
+    Args:
+        scores (Tensor(B, L, T)): ...
+        mask (Tensor(B, L))
+
+    Returns:
+        (Tensor(B)): logZ
+    '''
+
+    batch_size, seq_len, _ = scores.size()
+    lens = mask[:, 0].sum(dim=-1)
+
+    # s[*, i] is logsumexp score where a sequence segmentation path ending in i
+    s = scores.new_zeros(batch_size, seq_len)
+    # TODO initial ?
+    s.fill_(float("-inf"))
+
+    # links[*, k, i] is logsumexp score of a sequence end in k and link a word (k, i)
+    links = scores.new_zeros(batch_size, seq_len, seq_len)
+
+
+    for i in range(1, seq_len):
+        # 0 ~ k is max segmentation path linked with a word (k+1, i)
+        links[:, i-1, i:] = s[:, i-1].unsqueeze(-1) + scores[:, i-1, i:]
+        # 0 <= k < i
+        s[:, i] = = torch.logsumexp(links[:, :i, i], dim=-1)
+        
+    return s[torch.arange(batch_size), lens]
+
+
+@torch.no_grad()
+def directed_acyclic_graph(scores, mask):
+    """Chinese Word Segmentation with Directed Acyclic Graph.
+
+    Args:
+        scores (Tensor(B, L-1, L-1)): (*, i, j) is score for span(i, j)
+        mask (Tensor(B, L-1, L-1)): 
+
+    Returns:
+        segs (list[]): segmentation
+    """
+
+    batch_size, seq_len, _ = scores.size()
+    # actual words number: N
+    # TODO no need (B, L-1, L-1), (B, L-1) is enough
+    lens = mask[:, 0].sum(dim=-1)
+
+    # # links[*, k, i, j] <=> e(k, j) + t(i, j) <=> k is labeled as tag_j and k-1 is labeled as tag_i
+    # links = scores.unsqueeze(dim=2) + transition # (batch, seq_len, tag_nums, tag_nums)
+
+    # s[*, i] is max score where a sequence segmentation path ending in i
+    s = scores.new_zeros(batch_size, seq_len)
+    # backpoint[*, i] is split point k where sequence end in i and (k, i) is last word
+    backpoints = scores.new_ones(batch_size, seq_len).long()
+
+    # links[*, k, i] is max score of a sequence end in k and link a word (k, i)
+    links = scores.new_zeros(batch_size, seq_len, seq_len)
+
+    # preds = scores.new_ones((batch_size, seq_len))
+
+    for i in range(1, seq_len):
+        # 0 - k is max segmentation path, link a word (k+1, i) to the path
+        links[:, i-1, i:] = s[:, i-1].unsqueeze(-1) + scores[:, i-1, i:]
+        # 0 <= k < i
+        max_values, max_indices = torch.max(links[:, :i, i], dim=-1)
+        s[:, i] = max_values
+        backpoints[:, i] = max_indices
+
+    def backtrack(backpoint, i):
+
+        if i == 0:
+            return []
+        split = backpoint[i]
+        sub_seg = backtrack(backpoint, split)
+
+        return sub_seg + [split, i]
+
+    segs = [backtrack(backpoints[i], length)
+            for i, length in enumerate(lens.tolist())]
+
+    return segs
+
 def inside(scores, mask):
     batch_size, seq_len, _ = scores.shape
     # TODO difficult to understand the view of tensor
@@ -142,120 +259,4 @@ def cky(scores, mask):
              for i, length in enumerate(lens.tolist())]
 
     return trees
-
-
-def neg_log_likelihood(scores, tags, mask, transition):
-    '''
-    Args:
-        scores (Tensor(batch, seq_len, seq_len)): ...
-        tags (Tensor(batch, seq_len)): include <bos> <eos> and <pad>
-        mask (Tensor(batch, seq_len)): mask <bos> <eos > and <pad>
-    '''
-
-    gold_scores = score_sentence(scores, tags, mask, transition)
-    logZ = partition_function(scores, mask)
-    loss = logZ - gold_scores # (batch_size)
-
-    return loss.mean()
-
-def score_function(scores, spans, mask):
-    """[summary]
-
-    Args:
-        scores ([type]): [description]
-        spans ([type]): [description]
-        mask ([type]): [description]
-
-    Returns:
-        [Tensor(*)]: scores of all spans for a batch
-    """
-
-    batch_size, _, _ = scores.size()
-    lens = mask[:, 0].sum(dim=-1)
-
-    return scores[mask & spans]
-
-def partition_function(scores, mask):
-    '''
-    Args:
-        scores (Tensor(batch, seq_len, tag_nums)): ...
-        tags (Tensor(batch, seq_len)): include <bos> <eos> and <pad>
-        mask (Tensor(batch, seq_len)): mask <bos> <eos > and <pad>
-        transition (Tensor(tag_nums, tag_nums)): transition matrix, transition_ij is score of tag_i transit to tag_j
-    '''
-
-    batch_size, seq_len, _ = scores.size()
-    lens = mask[:, 0].sum(dim=-1)
-
-    # s[*, i] is logsumexp score where a sequence segmentation path ending in i
-    s = scores.new_zeros(batch_size, seq_len)
-    # TODO initial ?
-    s.fill_(float("-inf"))
-
-    # links[*, k, i] is logsumexp score of a sequence end in k and link a word (k, i)
-    links = scores.new_zeros(batch_size, seq_len, seq_len)
-
-
-    for i in range(1, seq_len):
-        # 0 ~ k is max segmentation path linked with a word (k+1, i)
-        links[:, i-1, i:] = s[:, i-1].unsqueeze(-1) + scores[:, i-1, i:]
-        # 0 <= k < i
-        s[:, i] = = torch.logsumexp(links[:, :i, i], dim=-1)
-        
-    return s[torch.arange(batch_size), lens]
-
-
-@torch.no_grad()
-def dag(scores, mask):
-    """Chinese Word Segmentation with Directed Acyclic Graph.
-
-    Args:
-        scores (Tensor(B, L-1, L-1)): (*, i, j) is score for span(i, j)
-        mask (Tensor(B, L-1, L-1)): 
-
-    Returns:
-        segs (list[]): segmentation
-    """
-
-    batch_size, seq_len, _ = scores.size()
-    # actual words number: N
-    # TODO no need (B, L-1, L-1), (B, L-1) is enough
-    lens = mask[:, 0].sum(dim=-1)
-
-    # # links[*, k, i, j] <=> e(k, j) + t(i, j) <=> k is labeled as tag_j and k-1 is labeled as tag_i
-    # links = scores.unsqueeze(dim=2) + transition # (batch, seq_len, tag_nums, tag_nums)
-
-    # s[*, i] is max score where a sequence segmentation path ending in i
-    s = scores.new_zeros(batch_size, seq_len)
-    # backpoint[*, i] is split point k where sequence end in i and (k, i) is last word
-    backpoints = scores.new_ones(batch_size, seq_len).long()
-
-    # links[*, k, i] is max score of a sequence end in k and link a word (k, i)
-    links = scores.new_zeros(batch_size, seq_len, seq_len)
-
-    # preds = scores.new_ones((batch_size, seq_len))
-
-    for i in range(1, seq_len):
-        # 0 - k is max segmentation path, link a word (k+1, i) to the path
-        links[:, i-1, i:] = s[:, i-1].unsqueeze(-1) + scores[:, i-1, i:]
-        # 0 <= k < i
-        max_values, max_indices = torch.max(links[:, :i, i], dim=-1)
-        s[:, i] = max_values
-        backpoints[:, i] = max_indices
-
-    def backtrack(backpoint, i):
-
-        if i == 0:
-            return []
-        split = backpoint[i]
-        sub_seg = backtrack(backpoint, split)
-
-        return sub_seg + [split, i]
-
-    segs = [backtrack(backpoints[i], length)
-            for i, length in enumerate(lens.tolist())]
-
-    return segs
-
-
 
