@@ -6,7 +6,7 @@ from parser.utils.alg import neg_log_likelihood, directed_acyclic_graph
 from parser.utils.common import pad, unk, bos, eos
 from parser.utils.corpus import CoNLL, Corpus
 from parser.utils.field import BertField, Field, NGramField, SegmentField
-from parser.utils.fn import get_spans
+from parser.utils.fn import get_spans, tensor2scalar
 from parser.utils.metric import SegF1Metric
 
 import torch
@@ -216,7 +216,9 @@ class CMD(object):
 
             pred_segs = self.decode(s_span, mask)
             # list
-            gold_segs = [torch.nonzero(gold).tolist() for gold in segs]
+            # gold_segs = [torch.nonzero(gold).tolist() for gold in segs]
+            gold_segs = [list(zip(*tensor2scalar(torch.nonzero(gold, as_tuple=True))))
+                         for gold in segs]
 
             total_loss += loss.item()
             metric(pred_segs, gold_segs)
@@ -224,7 +226,7 @@ class CMD(object):
         total_loss /= len(loader)
 
         # TODO metric
-        return total_loss, 0
+        return total_loss, metric
 
     @torch.no_grad()
     def predict(self, loader):

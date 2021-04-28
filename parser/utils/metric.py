@@ -33,6 +33,12 @@ class SegF1Metric(Metric):
         self.eps = eps
 
     def __call__(self, preds, golds):
+        """[summary]
+
+        Args:
+            preds (): List[List[tuple(i, j)]]
+            golds ([type]): [description]
+        """
         for pred, gold in zip(preds, golds):
             tp = list((Counter(pred) & Counter(gold)).elements())
             self.tp += len(tp)

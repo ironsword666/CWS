@@ -199,6 +199,16 @@ def seg2tag(segs):
 
     pass
 
+def tensor2scalar(indexes):
+    """[summary]
+
+    Args:
+        indexes ([type]): tuple(Tensor)
+    """
+
+    return [t.tolist() for t in indexes]
+
+
 def build(tree, sequence):
     label = tree.label()
     leaves = [subtree for subtree in tree.subtrees()
