@@ -5,9 +5,9 @@ from parser.utils import Embedding
 from parser.utils.alg import neg_log_likelihood, directed_acyclic_graph
 from parser.utils.common import pad, unk, bos, eos
 from parser.utils.corpus import CoNLL, Corpus
-from parser.utils.field import BertField, Field, NGramField
+from parser.utils.field import BertField, Field, NGramField, SegmentField
 from parser.utils.fn import get_spans
-from parser.utils.metric import SpanF1Metric
+from parser.utils.metric import SegF1Metric
 
 import torch
 import torch.nn as nn
@@ -27,7 +27,7 @@ class CMD(object):
                               bos=bos, eos=eos, lower=True)
                               
             # TODO span as label, modify chartfield to spanfield
-            self.LABEL = Field('labels')
+            self.SEG = SegmentField('segs')
 
             if args.feat == 'bert':
                 tokenizer = BertTokenizer.from_pretrained(args.bert_model)
@@ -37,12 +37,12 @@ class CMD(object):
                                       eos='[SEP]',
                                       tokenize=tokenizer.encode)
                 self.fields = CoNLL(CHAR=(self.CHAR, self.FEAT),
-                                    LABEL=self.LABEL)
+                                    SEG=self.SEG)
             elif args.feat == 'bigram':
                 self.BIGRAM = NGramField(
                     'bichar', n=2, pad=pad, unk=unk, bos=bos, eos=eos, lower=True)
                 self.fields = CoNLL(CHAR=(self.CHAR, self.BIGRAM),
-                                    LABEL=self.LABEL)
+                                    SEG=self.SEG)
             elif args.feat == 'trigram':
                 self.BIGRAM = NGramField(
                     'bichar', n=2, pad=pad, unk=unk, bos=bos, eos=eos, lower=True)
@@ -51,10 +51,10 @@ class CMD(object):
                 self.fields = CoNLL(CHAR=(self.CHAR,
                                           self.BIGRAM,
                                           self.TRIGRAM),
-                                    LABEL=self.LABEL)
+                                    SEG=self.SEG)
             else:
                 self.fields = CoNLL(CHAR=self.CHAR,
-                                    LABEL=self.LABEL)
+                                    SEG=self.SEG)
 
             train = Corpus.load(args.ftrain, self.fields)
             embed = Embedding.load(
@@ -78,7 +78,7 @@ class CMD(object):
                                    embed=embed,
                                    dict_file=args.dict_file)
             # TODO
-            self.LABEL.build(train)
+            self.SEG.build(train)
             torch.save(self.fields, args.fields)
         else:
             self.fields = torch.load(args.fields)
@@ -91,7 +91,7 @@ class CMD(object):
             else:
                 self.CHAR = self.fields.CHAR
             # TODO
-            self.LABEL = self.fields.LABEL
+            self.SEG = self.fields.SEG
         # TODO loss funciton 
         # self.criterion = nn.CrossEntropyLoss()
         # # [B, E, M, S]
@@ -104,14 +104,12 @@ class CMD(object):
 
         args.update({
             'n_chars': self.CHAR.vocab.n_init,
-            # TODO
-            'n_labels': len(self.LABEL.vocab),
             'pad_index': self.CHAR.pad_index,
             'unk_index': self.CHAR.unk_index
         })
 
         # TODO
-        vocab = f"{self.CHAR}\n{self.LABEL}\n"
+        vocab = f"{self.CHAR}\n"
         if hasattr(self, 'FEAT'):
             args.update({
                 'n_feats': self.FEAT.vocab.n_init,
@@ -137,17 +135,17 @@ class CMD(object):
         for data in loader:
             # TODO label
             if self.args.feat == 'bert':
-                chars, feats, labels = data
+                chars, feats, segs = data
                 feed_dict = {"chars": chars, "feats": feats}
             elif self.args.feat == 'bigram':
-                chars, bigram, labels = data
+                chars, bigram, segs = data
                 feed_dict = {"chars": chars, "bigram": bigram}
             elif self.args.feat == 'trigram':
-                chars, bigram, trigram, labels = data
+                chars, bigram, trigram, segs = data
                 feed_dict = {"chars": chars,
                              "bigram": bigram, "trigram": trigram}
             else:
-                chars, labels = data
+                chars, segs = data
                 feed_dict = {"chars": chars}
 
             self.optimizer.zero_grad()
@@ -175,7 +173,7 @@ class CMD(object):
             mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
             # (B, L-1, L-1)
             s_span = self.model(feed_dict)
-            loss, _ = self.get_loss(s_span, spans, mask)
+            loss = self.get_loss(s_span, segs, mask)
             loss.backward()
             nn.utils.clip_grad_norm_(self.model.parameters(),
                                      self.args.clip)
@@ -186,21 +184,21 @@ class CMD(object):
     def evaluate(self, loader):
         self.model.eval()
 
-        total_loss, metric = 0, SpanF1Metric()
+        total_loss, metric = 0, SegF1Metric()
 
         for data in loader:
             if self.args.feat == 'bert':
-                chars, feats, labels = data
+                chars, feats, segs = data
                 feed_dict = {"chars": chars, "feats": feats}
             elif self.args.feat == 'bigram':
-                chars, bigram, labels = data
+                chars, bigram, segs = data
                 feed_dict = {"chars": chars, "bigram": bigram}
             elif self.args.feat == 'trigram':
-                chars, bigram, trigram, labels = data
+                chars, bigram, trigram, segs = data
                 feed_dict = {"chars": chars,
                              "bigram": bigram, "trigram": trigram}
             else:
-                chars, labels = data
+                chars, segs = data
                 feed_dict = {"chars": chars}
 
             # TODO mask
@@ -209,22 +207,24 @@ class CMD(object):
             lens = mask.sum(1).tolist()
             s_span = self.model(feed_dict)
             # TODO
-            loss = self.get_loss(scores, labels, mask)
+            loss = self.get_loss(scores, segs, mask)
 
-            pred_spans = self.decode(s_span, mask)
-            gold_labels = labels
+            pred_segs = self.decode(s_span, mask)
+            gold_segs = segs
 
             total_loss += loss.item()
-            metric(pred_labels, gold_labels)
+            metric(pred_segs, gold_segs)
+
         total_loss /= len(loader)
 
-        return total_loss, metric
+        # TODO metric
+        return total_loss, "metric"
 
     @torch.no_grad()
     def predict(self, loader):
         self.model.eval()
 
-        all_labels = []
+        all_segs = []
         for data in loader:
             if self.args.feat == 'bert':
                 chars, feats = data
@@ -237,27 +237,26 @@ class CMD(object):
                 feed_dict = {"chars": chars,
                              "bigram": bigram, "trigram": trigram}
             else:
-                chars, labels = data
+                chars = data
                 feed_dict = {"chars": chars}
             # TODO
             mask = chars.ne(self.args.pad_index)
             s_span = self.model(feed_dict)
             # TODO
-            pred_labels = viterbi(self.trans, scores, mask)
+            pred_segs = directed_acyclic_graph(s_span, mask)
             # TODO
-            all_labels.extend(pred_labels)
-        all_labels = [self.LABEL.vocab.id2token(sequence.tolist())
-                      for sequence in all_labels]
+            all_segs.extend(pred_segs)
+        # TODO
 
-        return all_labels
+        return all_segs
 
-    def get_loss(self, s_span, spans, mask):
+    def get_loss(self, s_span, segs, mask):
         """crf loss
 
         Args:
             s_span (Tensor(B, N, N)): scores for candidate words (i, j)
-            spans (Tensor): groud_truth words
-            mask ([type]): # TODO
+            segs (Tensor(B, N, N)): groud truth words
+            mask (Tensor(B, N, N)): actual 
 
         Returns:
             loss [type]: 
@@ -267,7 +266,7 @@ class CMD(object):
         # span_mask = spans & mask
         # span_loss, span_probs = crf(s_span, mask, spans, self.args.marg)
 
-        loss = neg_log_likelihood(scores, spans, mask)
+        loss = neg_log_likelihood(scores, segs, mask)
 
         return loss
 

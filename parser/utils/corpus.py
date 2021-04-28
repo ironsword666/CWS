@@ -2,11 +2,13 @@
 
 from collections import namedtuple
 from collections.abc import Iterable
+
+from parser.utils.fn import tag2seg
 from parser.utils.field import Field
 
 
 CoNLL = namedtuple(typename='CoNLL',
-                   field_names=['CHAR', 'LABEL'],
+                   field_names=['CHAR', 'SEG'],
                    defaults=[None]*2)
 
 
@@ -76,7 +78,9 @@ class Corpus(object):
             lines = [line.strip() for line in f]
         for i, line in enumerate(lines):
             if not line:
+                # [chars: ["我", "爱", ...], tags: [B, M, E, ...]]
                 values = list(zip(*[l.split('\t') for l in lines[start:i]]))
+                values[-1] = tag2seg(values[-1]) 
                 sentences.append(Sentence(fields, values))
                 start = i + 1
 

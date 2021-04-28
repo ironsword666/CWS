@@ -161,6 +161,43 @@ def factorize(tree, delete_labels=None, equal_labels=None):
         return j, spans
     return track(tree, 0)[1]
 
+def tag2seg(tags):
+    """transform a tag sequence to a segmentation sequence.
+
+    Args:
+        tags (list): ['s', 's', 'b', 'e', 's', 'b', 'e', 'b', 'e', 'b', 'e']
+
+    Returns:
+        segs (list): [(0, 1), (1, 2), (2, 4), (4, 5), (5, 7), (7, 9), (9, 11)]
+    """
+    start = 0
+    end = 0
+    segs = []
+
+    for tag in tags:
+        end += 1
+        if tag == 'e' or tag == 's':
+            segs.append((start, end))
+            start = end
+
+    if start != end:
+        segs.append((start, end))
+
+    return segs
+
+def seg2tag(segs):
+    """transform a segmentation sequence to a tag sequence.
+
+    Args:
+        segs (list): [(0, 1), (1, 2), (2, 4), (4, 5), (5, 7), (7, 9), (9, 11)]
+
+    Returns:
+        tags (list): ['s', 's', 'b', 'e', 's', 'b', 'e', 'b', 'e', 'b', 'e']
+    """
+
+    # TODO
+
+    pass
 
 def build(tree, sequence):
     label = tree.label()

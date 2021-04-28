@@ -79,7 +79,7 @@ def neg_log_likelihood(scores, spans, mask):
     '''
     Args:
         scores (Tensor(batch, seq_len, seq_len)): ...
-        tags (Tensor(batch, seq_len)): include <bos> <eos> and <pad>
+        spans (Tensor(batch, seq_len)): include <bos> <eos> and <pad>
         mask (Tensor(batch, seq_len)): mask <bos> <eos > and <pad>
     '''
 
@@ -144,11 +144,11 @@ def directed_acyclic_graph(scores, mask):
     """Chinese Word Segmentation with Directed Acyclic Graph.
 
     Args:
-        scores (Tensor(B, L-1, L-1)): (*, i, j) is score for span(i, j)
-        mask (Tensor(B, L-1, L-1)): 
+        scores (Tensor(B, N, N)): (*, i, j) is score for span(i, j)
+        mask (Tensor(B, N, N))
 
     Returns:
-        segs (list[]): segmentation
+        segs (list[]): segmentation sequence
     """
 
     batch_size, seq_len, _ = scores.size()
@@ -178,7 +178,15 @@ def directed_acyclic_graph(scores, mask):
         backpoints[:, i] = max_indices
 
     def backtrack(backpoint, i):
+        """
 
+        Args:
+            backpoint (list): (backpoint[i], i) is last word of segmentation
+            i (int): end of word segmentation
+
+        Returns:
+            [type]: [description]
+        """
         if i == 0:
             return []
         split = backpoint[i]

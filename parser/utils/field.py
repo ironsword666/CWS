@@ -210,6 +210,45 @@ class NGramField(Field):
 
         return sequences
 
+class SegmentField(Field):
+    """[summary]
+
+    Examples:
+        >>> sentence = ["我", "喜欢", "这个", ""游戏]
+        >>> sequence = [(0, 1), (1, 3), (3, 5), (5, 7)]
+        >>> spans = field.transform([sequences])[0]  
+        >>> spans
+        tensor([[False, True, False, False,  False,  False, False, False],
+                [False, False,  False, True,  False, False, False, False],
+                [False, False, False,  False,  False, False, False, False],
+                [False, False, False, False,  False, True, False, False],
+                [False, False, False, False, False,  False, False, False],
+                [False, False, False, False, False, False, False, True],
+                [False, False, False, False, False, False, False, False],
+                [False, False, False, False, False, False, False, False]])
+    """
+
+    def build(self, corpus, min_freq=1):
+        """do nothing
+
+        """
+        
+        return
+
+    def transform(self, sequences):
+
+        sequences = [self.preprocess(sequence) for sequence in sequences]
+        spans = []
+
+        for sequence in sequences:
+            seq_len = sequence[-1][1] + 1
+            span_chart = torch.full((seq_len, seq_len), self.pad_index).bool()
+            for i, j in sequence:
+                span_chart[i, j] = 1
+                
+            spans.append(span_chart)
+            
+        return spans
 
 class BertField(Field):
 
