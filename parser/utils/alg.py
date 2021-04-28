@@ -83,10 +83,11 @@ def neg_log_likelihood(scores, spans, mask):
         mask (Tensor(batch, seq_len)): mask <bos> <eos > and <pad>
     '''
 
+    batch_size, _, _ = scores.shape
     gold_scores = score_function(scores, spans, mask).sum()
     logZ = partition_function(scores, mask).sum()
     # TODO batch size or total span ?
-    loss = (logZ - gold_scores) / # (batch_size)
+    loss = (logZ - gold_scores) / batch_size # (batch_size)
 
     return loss
 
