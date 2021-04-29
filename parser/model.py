@@ -50,11 +50,17 @@ class Model(nn.Module):
         self.mlp_span_r = MLP(n_in=args.n_lstm_hidden*2,
                               n_out=args.n_mlp_span,
                               dropout=args.mlp_dropout)
+        # a representation that a fencepost is a split point
+        self.mlp_span_s = MLP(n_in=args.n_lstm_hidden*2,
+                              n_out=args.n_mlp_span,
+                              dropout=args.mlp_dropout)
 
         # the Biaffine layers
         self.span_attn = Biaffine(n_in=args.n_mlp_span,
                                   bias_x=True,
                                   bias_y=False)
+        # scores for split points
+        self.score_split = nn.Linear(args.n_mlp_span, 1)
 
         self.pad_index = args.pad_index
         self.unk_index = args.unk_index
@@ -79,7 +85,7 @@ class Model(nn.Module):
                 nn.init.zeros_(self.trigram_embed.weight)
         return self
 
-    def forward(self, feed_dict):
+    def forward(self, feed_dict, link=None):
         chars = feed_dict["chars"]
         batch_size, seq_len = chars.shape
         # get the mask and lengths of given batch
@@ -148,14 +154,22 @@ class Model(nn.Module):
         # (B, L-1, hidden_size*2) 
         x = torch.cat((x_f[:, :-1], x_b[:, 1:]), -1)
         # apply MLPs to the BiLSTM output states
+        # (B, L-1, n_mlp_span) 
         span_l = self.mlp_span_l(x)
         span_r = self.mlp_span_r(x)
+        span_s = self.mlp_span_s(x)
 
         # (*, i, j) is score of span (i, j)
         # (B, L-1, L-1)
         s_span = self.span_attn(span_l, span_r)
 
-        return s_span
+        if link == 'mlp':
+            # (B, L-1)
+            s_link = self.score_split(span_s).squeeze(dim=-1)
+        else:
+            s_link = None
+
+        return s_span, s_link
 
     @classmethod
     def load(cls, path):

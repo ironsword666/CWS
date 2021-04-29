@@ -75,45 +75,53 @@ def crf(scores, mask, target=None, marg=False):
 
 
 
-def neg_log_likelihood(scores, spans, mask):
+def neg_log_likelihood(scores, spans, mask, s_link=None):
     '''
     Args:
         scores (Tensor(batch, seq_len, seq_len)): ...
         spans (Tensor(batch, seq_len)): include <bos> <eos> and <pad>
         mask (Tensor(batch, seq_len)): mask <bos> <eos > and <pad>
+        s_link (Tensor(B, L-1)): score for split point
     '''
 
     batch_size, _, _ = scores.shape
-    gold_scores = score_function(scores, spans, mask).sum()
-    logZ = partition_function(scores, mask).sum()
+    gold_scores = score_function(scores, spans, mask, s_link).sum()
+    logZ = partition_function(scores, mask, s_link).sum()
     # TODO batch size or total span ?
     loss = (logZ - gold_scores) / batch_size # (batch_size)
 
     return loss
 
-def score_function(scores, spans, mask):
+def score_function(scores, spans, mask, s_link=None):
     """[summary]
 
     Args:
-        scores ([type]): [description]
-        spans ([type]): [description]
-        mask ([type]): [description]
+        scores (Tensor(B, L-1, L-1)): ...
+        spans (Tensor(B, L-1, L-1)): ground truth word segmentation, see SegmentField for details
+        mask (Tensor(B, L-1, L-1)): L include <bos> and <eos>
+        s_link (Tensor(B, L-1)): score for split point
+
 
     Returns:
         (Tensor(*)): scores of all spans for a batch
     """
 
-    batch_size, _, _ = scores.size()
+    batch_size, seq_len, _ = scores.size()
     lens = mask[:, 0].sum(dim=-1)
     # TODO score function
 
-    return scores[mask & spans]
+    if s_link == None:
+        return scores[mask & spans]
+    else:
+        return scores[mask & spans] + s_link.unsqueeze(-1).expand(batch_size, seq_len, seq_len)[mask & spans]
 
-def partition_function(scores, mask):
+def partition_function(scores, mask, s_link=None):
     '''
     Args:
-        scores (Tensor(B, N, N)): ...
-        mask (Tensor(B, N, N))
+        scores (Tensor(B, L-1, L-1)): ...
+        mask (Tensor(B, L-1, L-1)): L include <bos> and <eos>
+        s_link (Tensor(B, L-1)): score for split point
+
 
     Returns:
         (Tensor(B)): logZ
@@ -139,18 +147,23 @@ def partition_function(scores, mask):
     #     s[:, i] = torch.logsumexp(links[:, :i, i], dim=-1)
     for i in range(1, seq_len):
         # 0 <= k < i
-        s[:, i] = torch.logsumexp(s[:, :i] + scores[:, :i, i], dim=-1)
+        if s_link == None:
+            #  # s[:, :i] + scores[:, :i, i] is sum score of segmentation end in i and last word is (k, i)
+            s[:, i] = torch.logsumexp(s[:, :i] + scores[:, :i, i], dim=-1)
+        else:
+            s[:, i] = torch.logsumexp(s[:, :i] + scores[:, :i, i] + s_link[:, :i], dim=-1)
         
     return s[torch.arange(batch_size), lens]
 
 
 @torch.no_grad()
-def directed_acyclic_graph(scores, mask):
+def directed_acyclic_graph(scores, mask, s_link=None):
     """Chinese Word Segmentation with Directed Acyclic Graph.
 
     Args:
         scores (Tensor(B, N, N)): (*, i, j) is score for span(i, j)
         mask (Tensor(B, N, N))
+        s_link (Tensor(B, L-1)): score for split point
 
     Returns:
         segs (list[]): segmentation sequence
@@ -173,7 +186,11 @@ def directed_acyclic_graph(scores, mask):
 
     for i in range(1, seq_len):
         # 0 <= k < i
-        max_values, max_indices = torch.max(s[:, :i] + scores[:, :i, i], dim=-1)
+        if s_link == None:
+            # s[:, :i] + scores[:, :i, i] is max score of segmentation end in i and last word is (k, i)
+            max_values, max_indices = torch.max(s[:, :i] + scores[:, :i, i], dim=-1)
+        else:
+            max_values, max_indices = torch.max(s[:, :i] + scores[:, :i, i] + s_link[:, :i], dim=-1)
         s[:, i] = max_values
         backpoints[:, i] = max_indices
 

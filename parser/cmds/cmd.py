@@ -172,10 +172,10 @@ class CMD(object):
             # (B, L-1, L-1)
             mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
             # (B, L-1, L-1)
-            s_span = self.model(feed_dict)
+            s_span, s_link = self.model(feed_dict, self.args.link)
 
             # with torch.autograd.set_detect_anomaly(True):
-            loss = self.get_loss(s_span, segs, mask)
+            loss = self.get_loss(s_span, segs, mask, s_link)
                 
             # with torch.autograd.set_detect_anomaly(True):
             loss.backward()
@@ -210,11 +210,11 @@ class CMD(object):
             lens = chars.ne(self.args.pad_index).sum(1) - 1
             mask = lens.new_tensor(range(seq_len - 1)) < lens.view(-1, 1, 1)
             mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
-            s_span = self.model(feed_dict)
+            s_span, s_link = self.model(feed_dict, self.args.link)
             # TODO
-            loss = self.get_loss(s_span, segs, mask)
+            loss = self.get_loss(s_span, segs, mask, s_link)
 
-            pred_segs = self.decode(s_span, mask)
+            pred_segs = self.decode(s_span, mask, s_link)
             # list
             # gold_segs = [torch.nonzero(gold).tolist() for gold in segs]
             gold_segs = [list(zip(*tensor2scalar(torch.nonzero(gold, as_tuple=True))))
@@ -249,20 +249,20 @@ class CMD(object):
                 feed_dict = {"chars": chars}
             # TODO
             mask = chars.ne(self.args.pad_index)
-            s_span = self.model(feed_dict)
+            s_span, s_link = self.model(feed_dict, self.args.link)
             # TODO
-            pred_segs = directed_acyclic_graph(s_span, mask)
+            pred_segs = directed_acyclic_graph(s_span, mask, s_link)
             # TODO
             all_segs.extend(pred_segs)
         # TODO
 
         return all_segs
 
-    def get_loss(self, s_span, segs, mask):
+    def get_loss(self, s_span, segs, mask, s_link):
         """crf loss
 
         Args:
-            s_span (Tensor(B, N, N)): scores for candidate words (i, j)
+            scores (Tensor(B, N, N)): scores for candidate words (i, j)
             segs (Tensor(B, N, N)): groud truth words
             mask (Tensor(B, N, N)): actual 
 
@@ -274,13 +274,13 @@ class CMD(object):
         # span_mask = spans & mask
         # span_loss, span_probs = crf(s_span, mask, spans, self.args.marg)
 
-        loss = neg_log_likelihood(s_span, segs, mask)
+        loss = neg_log_likelihood(s_span, segs, mask, s_link)
 
         return loss
 
-    def decode(self, s_span, mask):
+    def decode(self, s_span, mask, s_link):
 
-        pred_spans = directed_acyclic_graph(s_span, mask)
+        pred_spans = directed_acyclic_graph(s_span, mask, s_link)
         
         preds = pred_spans
 

@@ -40,6 +40,10 @@ if __name__ == '__main__':
                                help='max num of buckets to use')
         subparser.add_argument('--marg', action='store_true',
                                help='whether to use marginal probs')
+        subparser.add_argument('--link', default=None,
+                               choices=[None, 'mlp'],  
+                               help='choices of link method')
+                    
     args = parser.parse_args()
 
     print(f"Set the max num of threads to {args.threads}")
