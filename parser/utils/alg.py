@@ -108,12 +108,11 @@ def score_function(scores, spans, mask, s_link=None):
 
     batch_size, seq_len, _ = scores.size()
     lens = mask[:, 0].sum(dim=-1)
-    # TODO score function
 
     if s_link == None:
         return scores[mask & spans]
     else:
-        return scores[mask & spans] + s_link.unsqueeze(-1).expand(batch_size, seq_len, seq_len)[mask & spans]
+        return scores[mask & spans] + s_link.expand_as(scores)[mask & spans]
 
 def partition_function(scores, mask, s_link=None):
     '''
@@ -135,23 +134,14 @@ def partition_function(scores, mask, s_link=None):
     # TODO initial ?
     # s = torch.full_like(scores[:, 0], float("-inf"))
 
-    # # links[*, k, i] is logsumexp score of a sequence end in k and link a word (k, i)
-    # links = scores.new_zeros(batch_size, seq_len, seq_len)
+    if s_link is not None:
+        scores = scores + s_link
 
-
-    # for i in range(1, seq_len):
-    #     # 0 ~ k is max segmentation path linked with a word (k+1, i)
-    #     # TODO -inf with zero? logsumexp?
-    #     links[:, i-1, i:] = s[:, i-1].unsqueeze(-1) + scores[:, i-1, i:]
-    #     # 0 <= k < i
-    #     s[:, i] = torch.logsumexp(links[:, :i, i], dim=-1)
     for i in range(1, seq_len):
         # 0 <= k < i
-        if s_link == None:
-            #  # s[:, :i] + scores[:, :i, i] is sum score of segmentation end in i and last word is (k, i)
-            s[:, i] = torch.logsumexp(s[:, :i] + scores[:, :i, i], dim=-1)
-        else:
-            s[:, i] = torch.logsumexp(s[:, :i] + scores[:, :i, i] + s_link[:, :i], dim=-1)
+        # s[:, :i] + scores[:, :i, i] is sum score of segmentation end in i and last word is (k, i)
+        s[:, i] = torch.logsumexp(s[:, :i] + scores[:, :i, i], dim=-1)
+
         
     return s[torch.arange(batch_size), lens]
 
@@ -174,23 +164,19 @@ def directed_acyclic_graph(scores, mask, s_link=None):
     # TODO no need (B, L-1, L-1), (B, L-1) is enough
     lens = mask[:, 0].sum(dim=-1)
 
-    # # links[*, k, i, j] <=> e(k, j) + t(i, j) <=> k is labeled as tag_j and k-1 is labeled as tag_i
-    # links = scores.unsqueeze(dim=2) + transition # (batch, seq_len, tag_nums, tag_nums)
+    if s_link is not None:
+        scores = scores + s_link
 
     # s[*, i] is max score where a sequence segmentation path ending in i
     s = scores.new_zeros(batch_size, seq_len)
     # backpoint[*, i] is split point k where sequence end in i and (k, i) is last word
     backpoints = scores.new_ones(batch_size, seq_len).long()
 
-    # preds = scores.new_ones((batch_size, seq_len))
-
     for i in range(1, seq_len):
         # 0 <= k < i
-        if s_link == None:
-            # s[:, :i] + scores[:, :i, i] is max score of segmentation end in i and last word is (k, i)
-            max_values, max_indices = torch.max(s[:, :i] + scores[:, :i, i], dim=-1)
-        else:
-            max_values, max_indices = torch.max(s[:, :i] + scores[:, :i, i] + s_link[:, :i], dim=-1)
+        # s[:, :i] + scores[:, :i, i] is max score of segmentation end in i and last word is (k, i)
+        max_values, max_indices = torch.max(s[:, :i] + scores[:, :i, i], dim=-1)
+       
         s[:, i] = max_values
         backpoints[:, i] = max_indices
 

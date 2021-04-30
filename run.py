@@ -41,7 +41,7 @@ if __name__ == '__main__':
         subparser.add_argument('--marg', action='store_true',
                                help='whether to use marginal probs')
         subparser.add_argument('--link', default=None,
-                               choices=[None, 'mlp'],  
+                               choices=[None, 'mlp', 'att'],  
                                help='choices of link method')
                     
     args = parser.parse_args()

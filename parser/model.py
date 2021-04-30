@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from parser.modules import CHAR_LSTM, MLP, BertEmbedding, Biaffine, BiLSTM
+from parser.modules import CHAR_LSTM, MLP, BertEmbedding, Biaffine, ElementWiseBiaffine, BiLSTM
 from parser.modules.dropout import IndependentDropout, SharedDropout
 
 import torch
@@ -50,17 +50,26 @@ class Model(nn.Module):
         self.mlp_span_r = MLP(n_in=args.n_lstm_hidden*2,
                               n_out=args.n_mlp_span,
                               dropout=args.mlp_dropout)
-        # a representation that a fencepost is a split point
-        self.mlp_span_s = MLP(n_in=args.n_lstm_hidden*2,
-                              n_out=args.n_mlp_span,
-                              dropout=args.mlp_dropout)
+
 
         # the Biaffine layers
         self.span_attn = Biaffine(n_in=args.n_mlp_span,
                                   bias_x=True,
                                   bias_y=False)
-        # scores for split points
-        self.score_split = nn.Linear(args.n_mlp_span, 1)
+
+        if args.link == 'mlp':
+            # a representation that a fencepost is a split point
+            self.mlp_span_s = MLP(n_in=args.n_lstm_hidden*2,
+                                n_out=args.n_mlp_span,
+                                dropout=args.mlp_dropout)
+
+            # scores for split points
+            self.score_split = nn.Linear(args.n_mlp_span, 1)
+
+        elif args.link == 'att':
+            self.split_attn = ElementWiseBiaffine(n_in=args.n_lstm_hidden,
+                                                  bias_x=True,
+                                                  bias_y=False)
 
         self.pad_index = args.pad_index
         self.unk_index = args.unk_index
@@ -148,7 +157,7 @@ class Model(nn.Module):
         x, _ = pad_packed_sequence(x, True, total_length=seq_len)
         x = self.lstm_dropout(x)
 
-        # (B, L, hidden_size*2)
+        # (B, L, hidden_size)
         x_f, x_b = x.chunk(2, dim=-1)
         # representation for fenceposts
         # (B, L-1, hidden_size*2) 
@@ -157,7 +166,7 @@ class Model(nn.Module):
         # (B, L-1, n_mlp_span) 
         span_l = self.mlp_span_l(x)
         span_r = self.mlp_span_r(x)
-        span_s = self.mlp_span_s(x)
+        
 
         # (*, i, j) is score of span (i, j)
         # (B, L-1, L-1)
@@ -165,10 +174,14 @@ class Model(nn.Module):
 
         if link == 'mlp':
             # (B, L-1)
-            s_link = self.score_split(span_s).squeeze(dim=-1)
+            span_s = self.mlp_span_s(x)
+            s_link = self.score_split(span_s)
+        elif link == 'att':
+            s_link = self.split_attn(x_f[:, :-1], x_b[:, 1:]).unsqueeze(dim=-1)
         else:
             s_link = None
 
+        # (B, N, N), (B, N, 1)
         return s_span, s_link
 
     @classmethod

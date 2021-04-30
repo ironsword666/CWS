@@ -171,7 +171,7 @@ class CMD(object):
             #  [False, False, False, False, False, False, False, False, False]]
             # (B, L-1, L-1)
             mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
-            # (B, L-1, L-1)
+            # (B, L-1, L-1), (B, L-1, 1)
             s_span, s_link = self.model(feed_dict, self.args.link)
 
             # with torch.autograd.set_detect_anomaly(True):
@@ -210,8 +210,9 @@ class CMD(object):
             lens = chars.ne(self.args.pad_index).sum(1) - 1
             mask = lens.new_tensor(range(seq_len - 1)) < lens.view(-1, 1, 1)
             mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
+
             s_span, s_link = self.model(feed_dict, self.args.link)
-            # TODO
+
             loss = self.get_loss(s_span, segs, mask, s_link)
 
             pred_segs = self.decode(s_span, mask, s_link)
@@ -247,14 +248,14 @@ class CMD(object):
             else:
                 chars = data
                 feed_dict = {"chars": chars}
-            # TODO
+ 
             mask = chars.ne(self.args.pad_index)
+            
             s_span, s_link = self.model(feed_dict, self.args.link)
-            # TODO
+
             pred_segs = directed_acyclic_graph(s_span, mask, s_link)
-            # TODO
+
             all_segs.extend(pred_segs)
-        # TODO
 
         return all_segs
 
